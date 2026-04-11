@@ -22,9 +22,50 @@ export default function App() {
   const [showBanner, setShowBanner] = useState(false);
 
   useEffect(() => {
-    // Register service worker
+    if (!('serviceWorker' in navigator)) return;
+
+    // If SW controller changes (new SW activated) — reload once for fresh content
+    let refreshing = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!refreshing) {
+        refreshing = true;
+        window.location.reload();
+      }
+    });
+
+    window.addEventListener('load', async () => {
+      try {
+        const reg = await navigator.serviceWorker.register(
+          '/sw.js',
+          { updateViaCache: 'none' }, // Never cache the SW file itself
+        );
+
+        // Check for updates immediately on every load
+        await reg.update();
+
+        // When a new SW version is found, activate it immediately
+        reg.addEventListener('updatefound', () => {
+          const newWorker = reg.installing;
+          if (!newWorker) return;
+          newWorker.addEventListener('statechange', () => {
+            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+              // Tell new SW to skip waiting and take control now
+              newWorker.postMessage('skipWaiting');
+            }
+          });
+        });
+      } catch {
+        // SW registration failure is non-fatal
+      }
+    });
+  }, []);
+
+  // Force SW update check on every app load
+  useEffect(() => {
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js').catch(() => {});
+      navigator.serviceWorker.getRegistration().then(reg => {
+        if (reg) reg.update();
+      });
     }
   }, []);
 
