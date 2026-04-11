@@ -1,6 +1,6 @@
-import { useState, useRef, useCallback } from 'react';
-import { useZxing } from 'react-zxing';
-import { BrowserMultiFormatReader } from '@zxing/library';
+import { useState, useRef, useCallback, useEffect } from 'react';
+import { BrowserMultiFormatReader } from '@zxing/browser';
+import { BrowserMultiFormatReader as ZxingLibReader, NotFoundException } from '@zxing/library';
 import { Search, Loader2, RotateCcw } from 'lucide-react';
 import type { MealType } from '../types';
 import { addLogEntry, todayStr } from '../utils/storage';
@@ -32,7 +32,6 @@ const inputStyle = { background: '#2f2f2f', border: '1px solid #3d3d3d', color: 
 // ─── Open Food Facts lookup ────────────────────────────────────────────────────
 
 async function lookupBarcode(barcode: string): Promise<ScannedProduct | null> {
-  // Try Australian database first, fall back to world
   const urls = [
     `https://au.openfoodfacts.org/api/v2/product/${barcode}.json?fields=product_name,product_name_en,nutriments`,
     `https://world.openfoodfacts.org/api/v2/product/${barcode}.json?fields=product_name,product_name_en,nutriments`,
@@ -69,34 +68,72 @@ async function lookupBarcode(barcode: string): Promise<ScannedProduct | null> {
 
 // ─── Live scanner component ────────────────────────────────────────────────────
 
+type ScannerError = 'camera_denied' | 'no_camera' | 'general' | null;
+
 function LiveScanner({ onScan }: { onScan: (barcode: string) => void }) {
-  const [permissionDenied, setPermissionDenied] = useState(false);
+  const videoRef     = useRef<HTMLVideoElement>(null);
+  const controlsRef  = useRef<{ stop(): void } | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError]         = useState<ScannerError>(null);
 
-  const { ref } = useZxing({
-    onResult(result) {
-      const barcode = result.getText();
-      if (barcode) {
-        navigator.vibrate?.(50);
-        onScan(barcode);
-      }
-    },
-    onError(error) {
-      const msg = String(error);
-      if (msg.includes('Permission') || msg.includes('NotAllowed') || msg.includes('denied')) {
-        setPermissionDenied(true);
-      }
-    },
-    constraints: {
-      video: {
-        facingMode: 'environment',
-        width: { ideal: 1280 },
-        height: { ideal: 720 },
-      },
-    },
-    timeBetweenDecodingAttempts: 150,
-  });
+  useEffect(() => {
+    const codeReader = new BrowserMultiFormatReader();
 
-  if (permissionDenied) {
+    const startScanner = async () => {
+      try {
+        setIsLoading(true);
+
+        // Find rear-facing camera by label
+        const devices = await BrowserMultiFormatReader.listVideoInputDevices();
+        const rearDevice = devices.find(d =>
+          d.label.toLowerCase().includes('back') ||
+          d.label.toLowerCase().includes('rear') ||
+          d.label.toLowerCase().includes('environment')
+        ) || devices[devices.length - 1];
+
+        const deviceId = rearDevice?.deviceId ?? undefined;
+        setIsLoading(false);
+
+        const controls = await codeReader.decodeFromVideoDevice(
+          deviceId,
+          videoRef.current!,
+          (result, err) => {
+            if (result) {
+              navigator.vibrate?.(50);
+              onScan(result.getText());
+            }
+            if (err && !(err instanceof NotFoundException)) {
+              // Ignore NotFoundException — it fires every frame when no barcode visible
+              const msg = String(err);
+              if (msg.includes('NotAllowed') || msg.includes('Permission') || msg.includes('denied')) {
+                setError('camera_denied');
+              }
+            }
+          },
+        );
+        controlsRef.current = controls;
+      } catch (err) {
+        setIsLoading(false);
+        const name = (err as Error).name ?? '';
+        if (name === 'NotAllowedError') {
+          setError('camera_denied');
+        } else if (name === 'NotFoundError') {
+          setError('no_camera');
+        } else {
+          setError('general');
+        }
+      }
+    };
+
+    startScanner();
+
+    return () => {
+      controlsRef.current?.stop();
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  if (error === 'camera_denied') {
     return (
       <div className="rounded-card p-6 text-center space-y-3" style={{ background: '#242424', border: '1px solid #3d3d3d' }}>
         <p className="text-3xl">📷</p>
@@ -106,7 +143,7 @@ function LiveScanner({ onScan }: { onScan: (barcode: string) => void }) {
           <p style={{ color: '#9b9b9b' }}><span style={{ color: '#ececec' }}>Android:</span> Settings → Chrome → Permissions → Camera → Allow</p>
         </div>
         <button
-          onClick={() => { setPermissionDenied(false); window.location.reload(); }}
+          onClick={() => window.location.reload()}
           className="active-scale w-full py-2.5 rounded-input text-sm font-semibold"
           style={{ background: '#d97706', color: '#1a1a1a' }}
         >
@@ -116,10 +153,36 @@ function LiveScanner({ onScan }: { onScan: (barcode: string) => void }) {
     );
   }
 
+  if (error === 'no_camera' || error === 'general') {
+    return (
+      <div className="rounded-card p-6 text-center space-y-2" style={{ background: '#242424', border: '1px solid #3d3d3d' }}>
+        <p className="text-3xl">⚠️</p>
+        <p className="text-sm font-semibold" style={{ color: '#ececec' }}>Scanner unavailable</p>
+        <p className="text-xs" style={{ color: '#9b9b9b' }}>Use the photo or manual entry options below</p>
+      </div>
+    );
+  }
+
   return (
     <div style={{ position: 'relative', width: '100%' }}>
+
+      {/* Loading overlay */}
+      {isLoading && (
+        <div style={{
+          position: 'absolute', inset: 0,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          background: '#000', borderRadius: '12px', zIndex: 2,
+        }}>
+          <div className="text-center">
+            <p className="text-2xl mb-2">📷</p>
+            <p className="text-sm" style={{ color: '#9b9b9b' }}>Starting camera…</p>
+          </div>
+        </div>
+      )}
+
+      {/* Video viewfinder */}
       <video
-        ref={ref}
+        ref={videoRef}
         style={{
           width: '100%',
           height: '260px',
@@ -129,45 +192,33 @@ function LiveScanner({ onScan }: { onScan: (barcode: string) => void }) {
           display: 'block',
         }}
       />
-      {/* Dim overlay with cutout illusion */}
-      <div style={{
-        position: 'absolute', inset: 0,
-        background: 'rgba(0,0,0,0.45)',
-        borderRadius: '12px',
-        pointerEvents: 'none',
-        WebkitMaskImage: 'radial-gradient(ellipse 210px 130px at 50% 50%, transparent 98%, black 100%)',
-        maskImage: 'radial-gradient(ellipse 210px 130px at 50% 50%, transparent 98%, black 100%)',
-      }} />
-      {/* Green guide box */}
+
+      {/* Green guide box with shadow-based dim overlay */}
       <div style={{
         position: 'absolute',
         top: '50%', left: '50%',
         transform: 'translate(-50%, -50%)',
-        width: '200px', height: '120px',
+        width: '220px', height: '110px',
         border: '2px solid #4ade80',
         borderRadius: '8px',
+        boxShadow: '0 0 0 1000px rgba(0,0,0,0.45)',
         pointerEvents: 'none',
-      }}>
-        {/* Corner markers */}
-        {[
-          { top: -2, left: -2, borderTop: '3px solid #4ade80', borderLeft: '3px solid #4ade80' },
-          { top: -2, right: -2, borderTop: '3px solid #4ade80', borderRight: '3px solid #4ade80' },
-          { bottom: -2, left: -2, borderBottom: '3px solid #4ade80', borderLeft: '3px solid #4ade80' },
-          { bottom: -2, right: -2, borderBottom: '3px solid #4ade80', borderRight: '3px solid #4ade80' },
-        ].map((s, i) => (
-          <div key={i} style={{ position: 'absolute', width: 16, height: 16, borderRadius: 2, border: 'none', ...s }} />
-        ))}
-        {/* Animated scan line */}
-        <div style={{
-          position: 'absolute',
-          top: '50%', left: 0, right: 0,
-          height: '2px',
-          background: 'linear-gradient(to right, transparent, #4ade80, transparent)',
-          animation: 'scanLine 2s ease-in-out infinite',
-          pointerEvents: 'none',
-        }} />
-      </div>
-      {/* Label */}
+        zIndex: 1,
+      }} />
+
+      {/* Animated scan line */}
+      <div style={{
+        position: 'absolute',
+        left: 'calc(50% - 110px)',
+        width: '220px',
+        height: '2px',
+        background: 'linear-gradient(90deg, transparent, #4ade80, transparent)',
+        animation: 'scanLine 2s ease-in-out infinite',
+        pointerEvents: 'none',
+        zIndex: 2,
+        top: '50%',
+      }} />
+
       <p className="text-xs text-center mt-2" style={{ color: '#9b9b9b' }}>
         Aim the green box at the barcode
       </p>
@@ -184,15 +235,12 @@ export default function BarcodeScanner({ meal, onMealChange, onLogged }: Props) 
   const [product, setProduct]         = useState<ScannedProduct | null>(null);
   const [scannedCode, setScannedCode] = useState('');
 
-  // Result editing
   const [editName, setEditName] = useState('');
   const [grams, setGrams]       = useState(100);
 
-  // Photo fallback
   const photoInputRef = useRef<HTMLInputElement>(null);
   const [photoError, setPhotoError] = useState('');
 
-  // Manual entry
   const [manualCode, setManualCode] = useState('');
 
   const handleBarcode = useCallback(async (barcode: string) => {
@@ -211,7 +259,6 @@ export default function BarcodeScanner({ meal, onMealChange, onLogged }: Props) 
     }
   }, [lookupState]);
 
-  // Photo capture handler
   async function handlePhotoCapture(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -229,7 +276,7 @@ export default function BarcodeScanner({ meal, onMealChange, onLogged }: Props) 
 
       let barcode: string | null = null;
 
-      // Try native BarcodeDetector first (Android Chrome)
+      // Native BarcodeDetector (Android Chrome)
       if ('BarcodeDetector' in window) {
         try {
           // @ts-expect-error BarcodeDetector not in TS lib
@@ -238,16 +285,12 @@ export default function BarcodeScanner({ meal, onMealChange, onLogged }: Props) 
           });
           const results = await detector.detect(img);
           if (results.length > 0) barcode = results[0].rawValue;
-        } catch { /* fall through to ZXing */ }
+        } catch { /* fall through */ }
       }
 
-      // Fall back to @zxing/library
+      // @zxing/library fallback
       if (!barcode) {
-        const canvas  = document.createElement('canvas');
-        canvas.width  = img.naturalWidth;
-        canvas.height = img.naturalHeight;
-        canvas.getContext('2d')!.drawImage(img, 0, 0);
-        const reader = new BrowserMultiFormatReader();
+        const reader = new ZxingLibReader();
         try {
           const result = await reader.decodeFromImageElement(img);
           barcode = result.getText();
@@ -267,7 +310,6 @@ export default function BarcodeScanner({ meal, onMealChange, onLogged }: Props) 
       setPhotoError('Could not read the photo — try again.');
     }
 
-    // Reset input so same file can be selected again
     if (photoInputRef.current) photoInputRef.current.value = '';
   }
 
@@ -311,7 +353,7 @@ export default function BarcodeScanner({ meal, onMealChange, onLogged }: Props) 
 
   const n = calcNutrients();
 
-  // ── Result card (shown after successful lookup) ──────────────────────────────
+  // ── Result card ──────────────────────────────────────────────────────────────
   if (lookupState === 'found' && product) {
     return (
       <div className="space-y-4">
@@ -332,7 +374,6 @@ export default function BarcodeScanner({ meal, onMealChange, onLogged }: Props) 
             onChange={e => setEditName(e.target.value)}
           />
 
-          {/* Grams stepper */}
           <div className="flex items-center gap-3">
             <button
               onClick={() => setGrams(g => Math.max(10, g - 10))}
@@ -357,13 +398,12 @@ export default function BarcodeScanner({ meal, onMealChange, onLogged }: Props) 
             >+</button>
           </div>
 
-          {/* Macros */}
           <div className="grid grid-cols-4 gap-1.5">
             {[
-              { label: 'Protein', val: `${n.prot}g`,     color: '#60a5fa' },
-              { label: 'Carbs',   val: `${n.carb}g`,     color: '#f97316' },
-              { label: 'Fat',     val: `${n.fat}g`,       color: '#facc15' },
-              { label: 'Calories', val: `${n.cal}`,       color: '#d97706' },
+              { label: 'Protein',  val: `${n.prot}g`, color: '#60a5fa' },
+              { label: 'Carbs',    val: `${n.carb}g`, color: '#f97316' },
+              { label: 'Fat',      val: `${n.fat}g`,  color: '#facc15' },
+              { label: 'Calories', val: `${n.cal}`,   color: '#d97706' },
             ].map(m => (
               <div key={m.label} className="rounded-input py-2 text-center" style={{ background: '#2f2f2f' }}>
                 <p className="text-xs font-bold font-tabular" style={{ color: m.color }}>{m.val}</p>
@@ -372,7 +412,6 @@ export default function BarcodeScanner({ meal, onMealChange, onLogged }: Props) 
             ))}
           </div>
 
-          {/* Meal selector */}
           <div className="flex gap-1.5">
             {MEALS.map(m => (
               <button key={m.key} onClick={() => onMealChange(m.key)}
@@ -432,20 +471,17 @@ export default function BarcodeScanner({ meal, onMealChange, onLogged }: Props) 
   return (
     <div className="space-y-5">
 
-      {/* Live camera scanner */}
       <div className="space-y-2">
         <p className="text-xs font-semibold" style={{ color: '#9b9b9b' }}>Point camera at barcode</p>
         <LiveScanner onScan={handleBarcode} />
       </div>
 
-      {/* Divider */}
       <div className="flex items-center gap-3">
         <div className="flex-1 h-px" style={{ background: '#3d3d3d' }} />
         <span className="text-xs" style={{ color: '#6b6b6b' }}>or</span>
         <div className="flex-1 h-px" style={{ background: '#3d3d3d' }} />
       </div>
 
-      {/* Photo fallback */}
       <div>
         <input
           ref={photoInputRef}
@@ -466,7 +502,6 @@ export default function BarcodeScanner({ meal, onMealChange, onLogged }: Props) 
         <p className="text-xs mt-1.5 text-center" style={{ color: '#6b6b6b' }}>Use this if live scan isn't working</p>
       </div>
 
-      {/* Manual entry */}
       <div className="flex gap-2">
         <input
           className="flex-1 rounded-input px-3 py-2.5 text-sm outline-none focus:ring-1 focus:ring-amber-600/50 font-tabular"
