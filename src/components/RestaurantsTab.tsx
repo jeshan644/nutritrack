@@ -30,6 +30,8 @@ export default function RestaurantsTab({ meal, onMealChange, onLogged }: Props) 
   const [selectedBrand, setSelectedBrand] = useState<string | null>(null);
   const [selectedKey, setSelectedKey]   = useState<string | null>(null); // `${brand}::${name}`
   const [servings, setServings]         = useState(1);
+  const [submitting, setSubmitting]     = useState(false);
+  const [submitError, setSubmitError]   = useState('');
 
   // Flat search/filter results (null = grouped "All" mode)
   const flatItems = useMemo<TaggedItem[] | null>(() => {
@@ -62,25 +64,32 @@ export default function RestaurantsTab({ meal, onMealChange, onLogged }: Props) 
   }
 
   async function handleAdd(item: TaggedItem) {
-    await addLogEntry({
-      id: crypto.randomUUID(),
-      date: todayStr(),
-      meal_type: meal,
-      entry_type: 'food',
-      name: `${item.name} (${item.brand})`,
-      calories: Math.round(item.cal * servings),
-      protein:  parseFloat((item.protein * servings).toFixed(1)),
-      carbs:    parseFloat((item.carbs   * servings).toFixed(1)),
-      fat:      parseFloat((item.fat     * servings).toFixed(1)),
-      fiber:    0,
-      quantity: servings,
-    });
-    setSelectedKey(null);
-    onLogged();
+    setSubmitting(true);
+    setSubmitError('');
+    try {
+      await addLogEntry({
+        id: crypto.randomUUID(),
+        date: todayStr(),
+        meal_type: meal,
+        entry_type: 'food',
+        name: `${item.name} (${item.brand})`,
+        calories: Math.round(item.cal * servings),
+        protein:  parseFloat((item.protein * servings).toFixed(1)),
+        carbs:    parseFloat((item.carbs   * servings).toFixed(1)),
+        fat:      parseFloat((item.fat     * servings).toFixed(1)),
+        fiber:    0,
+        quantity: servings,
+      });
+      setSelectedKey(null);
+      onLogged();
+    } catch (e) {
+      setSubmitError(e instanceof Error ? e.message : 'Failed to save. Please try again.');
+      setSubmitting(false);
+    }
   }
 
   // ── Item row ──────────────────────────────────────────────────────
-  function ItemRow({ item, showBrand }: { item: TaggedItem; showBrand: boolean }) {
+  function ItemRow({ item, showBrand }: { item: TaggedItem; showBrand: boolean; }) {
     const key       = itemKey(item);
     const expanded  = selectedKey === key;
 
@@ -168,12 +177,16 @@ export default function RestaurantsTab({ meal, onMealChange, onLogged }: Props) 
             </div>
 
             {/* Add button */}
+            {submitError && (
+              <p className="text-sm text-center" style={{ color: '#ef4444' }}>{submitError}</p>
+            )}
             <button
               onClick={() => handleAdd(item)}
+              disabled={submitting}
               className="active-scale w-full py-2.5 rounded-input text-sm font-bold"
-              style={{ background: '#d97706', color: '#1a1a1a' }}
+              style={{ background: submitting ? '#3d3d3d' : '#d97706', color: submitting ? '#9b9b9b' : '#1a1a1a' }}
             >
-              Add to {meal.charAt(0).toUpperCase() + meal.slice(1)}
+              {submitting ? 'Saving…' : `Add to ${meal.charAt(0).toUpperCase() + meal.slice(1)}`}
             </button>
           </div>
         )}

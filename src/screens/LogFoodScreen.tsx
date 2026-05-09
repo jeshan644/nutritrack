@@ -49,6 +49,10 @@ export default function LogFoodScreen({ defaultMeal, onClose, onLogged }: Props)
   const [selectedFood, setSelectedFood] = useState<SelectedFood | null>(null);
   const [foodGrams, setFoodGrams] = useState('100');
 
+  // Submit state (shared)
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState('');
+
   // AI parsing
   async function handleAIParse() {
     if (!aiText.trim()) { setAiError('Please describe your meal first.'); return; }
@@ -88,21 +92,28 @@ export default function LogFoodScreen({ defaultMeal, onClose, onLogged }: Props)
   }
 
   async function logAIItems() {
-    await Promise.all(aiItems.map(item => addLogEntry({
-      id: crypto.randomUUID(),
-      date: today,
-      meal_type: meal,
-      entry_type: 'ai',
-      name: item.name,
-      calories: item.calories,
-      protein: item.protein_g,
-      carbs: item.carbs_g,
-      fat: item.fat_g,
-      fiber: item.fiber_g || 0,
-      quantity: item.quantity_g,
-    })));
-    onLogged();
-    onClose();
+    setSubmitting(true);
+    setSubmitError('');
+    try {
+      await Promise.all(aiItems.map(item => addLogEntry({
+        id: crypto.randomUUID(),
+        date: today,
+        meal_type: meal,
+        entry_type: 'ai',
+        name: item.name,
+        calories: item.calories,
+        protein: item.protein_g,
+        carbs: item.carbs_g,
+        fat: item.fat_g,
+        fiber: item.fiber_g || 0,
+        quantity: item.quantity_g,
+      })));
+      onLogged();
+      onClose();
+    } catch (e) {
+      setSubmitError(e instanceof Error ? e.message : 'Failed to save. Please try again.');
+      setSubmitting(false);
+    }
   }
 
   // Search tab
@@ -126,38 +137,45 @@ export default function LogFoodScreen({ defaultMeal, onClose, onLogged }: Props)
 
   async function logSelectedFood() {
     if (!selectedFood) return;
-    let cal: number, prot: number, carb: number, fat: number, fiber: number;
-    if (selectedFood.isPreset) {
-      const srv = parseFloat(foodGrams) || 1;
-      cal = Math.round(selectedFood.calories * srv);
-      prot = parseFloat((selectedFood.protein * srv).toFixed(1));
-      carb = parseFloat((selectedFood.carbs * srv).toFixed(1));
-      fat = parseFloat((selectedFood.fat * srv).toFixed(1));
-      fiber = parseFloat(((selectedFood.fiber || 0) * srv).toFixed(1));
-    } else {
-      const g = parseFloat(foodGrams) || 100;
-      const ratio = g / 100;
-      cal = Math.round((selectedFood as Food).calories_per_100g * ratio);
-      prot = parseFloat((selectedFood.protein * ratio).toFixed(1));
-      carb = parseFloat((selectedFood.carbs * ratio).toFixed(1));
-      fat = parseFloat((selectedFood.fat * ratio).toFixed(1));
-      fiber = parseFloat(((selectedFood.fiber || 0) * ratio).toFixed(1));
+    setSubmitting(true);
+    setSubmitError('');
+    try {
+      let cal: number, prot: number, carb: number, fat: number, fiber: number;
+      if (selectedFood.isPreset) {
+        const srv = parseFloat(foodGrams) || 1;
+        cal = Math.round(selectedFood.calories * srv);
+        prot = parseFloat((selectedFood.protein * srv).toFixed(1));
+        carb = parseFloat((selectedFood.carbs * srv).toFixed(1));
+        fat = parseFloat((selectedFood.fat * srv).toFixed(1));
+        fiber = parseFloat(((selectedFood.fiber || 0) * srv).toFixed(1));
+      } else {
+        const g = parseFloat(foodGrams) || 100;
+        const ratio = g / 100;
+        cal = Math.round((selectedFood as Food).calories_per_100g * ratio);
+        prot = parseFloat((selectedFood.protein * ratio).toFixed(1));
+        carb = parseFloat((selectedFood.carbs * ratio).toFixed(1));
+        fat = parseFloat((selectedFood.fat * ratio).toFixed(1));
+        fiber = parseFloat(((selectedFood.fiber || 0) * ratio).toFixed(1));
+      }
+      await addLogEntry({
+        id: crypto.randomUUID(),
+        date: today,
+        meal_type: meal,
+        entry_type: 'food',
+        name: selectedFood.name,
+        calories: cal,
+        protein: prot,
+        carbs: carb,
+        fat,
+        fiber,
+        quantity: parseFloat(foodGrams),
+      });
+      onLogged();
+      onClose();
+    } catch (e) {
+      setSubmitError(e instanceof Error ? e.message : 'Failed to save. Please try again.');
+      setSubmitting(false);
     }
-    await addLogEntry({
-      id: crypto.randomUUID(),
-      date: today,
-      meal_type: meal,
-      entry_type: 'food',
-      name: selectedFood.name,
-      calories: cal,
-      protein: prot,
-      carbs: carb,
-      fat,
-      fiber,
-      quantity: parseFloat(foodGrams),
-    });
-    onLogged();
-    onClose();
   }
 
   const inputCls = "w-full rounded-input px-3 py-2.5 text-sm outline-none transition-colors focus:ring-1 focus:ring-amber-600/50";
@@ -316,12 +334,19 @@ export default function LogFoodScreen({ defaultMeal, onClose, onLogged }: Props)
                         </div>
                       </div>
                     ))}
+                    {submitError && (
+                      <p className="text-sm text-center" style={{ color: '#ef4444' }}>{submitError}</p>
+                    )}
                     <button
                       onClick={logAIItems}
-                      className="active-scale w-full py-3 rounded-input font-semibold text-sm"
-                      style={{ background: '#d97706', color: '#1a1a1a' }}
+                      disabled={submitting}
+                      className="active-scale w-full py-3 rounded-input font-semibold text-sm flex items-center justify-center gap-2"
+                      style={{ background: submitting ? '#3d3d3d' : '#d97706', color: submitting ? '#9b9b9b' : '#1a1a1a' }}
                     >
-                      Add {aiItems.length} item{aiItems.length > 1 ? 's' : ''} to {meal}
+                      {submitting
+                        ? <><Loader2 size={16} className="animate-spin" /> Saving…</>
+                        : `Add ${aiItems.length} item${aiItems.length > 1 ? 's' : ''} to ${meal}`
+                      }
                     </button>
                   </div>
                 )}
@@ -368,12 +393,19 @@ export default function LogFoodScreen({ defaultMeal, onClose, onLogged }: Props)
                   <span style={{ color: '#f97316' }}>C {previewMacros.carb}g</span>
                   <span style={{ color: '#facc15' }}>F {previewMacros.fat}g</span>
                 </div>
+                {submitError && (
+                  <p className="text-sm text-center" style={{ color: '#ef4444' }}>{submitError}</p>
+                )}
                 <button
                   onClick={logSelectedFood}
-                  className="active-scale w-full py-2.5 rounded-input text-sm font-semibold"
-                  style={{ background: '#d97706', color: '#1a1a1a' }}
+                  disabled={submitting}
+                  className="active-scale w-full py-2.5 rounded-input text-sm font-semibold flex items-center justify-center gap-2"
+                  style={{ background: submitting ? '#3d3d3d' : '#d97706', color: submitting ? '#9b9b9b' : '#1a1a1a' }}
                 >
-                  Add to {meal}
+                  {submitting
+                    ? <><Loader2 size={16} className="animate-spin" /> Saving…</>
+                    : `Add to ${meal}`
+                  }
                 </button>
               </div>
             )}

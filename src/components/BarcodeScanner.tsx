@@ -242,6 +242,8 @@ export default function BarcodeScanner({ meal, onMealChange, onLogged }: Props) 
   const [photoError, setPhotoError] = useState('');
 
   const [manualCode, setManualCode] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState('');
 
   const handleBarcode = useCallback(async (barcode: string) => {
     if (lookupState === 'loading') return;
@@ -326,21 +328,28 @@ export default function BarcodeScanner({ meal, onMealChange, onLogged }: Props) 
   }
 
   async function handleAddToLog() {
-    const n = calcNutrients();
-    await addLogEntry({
-      id:         crypto.randomUUID(),
-      date:       todayStr(),
-      meal_type:  meal,
-      entry_type: 'food',
-      name:       editName.trim() || product!.name,
-      calories:   n.cal,
-      protein:    n.prot,
-      carbs:      n.carb,
-      fat:        n.fat,
-      fiber:      n.fiber,
-      quantity:   grams,
-    });
-    onLogged();
+    setSubmitting(true);
+    setSubmitError('');
+    try {
+      const n = calcNutrients();
+      await addLogEntry({
+        id:         crypto.randomUUID(),
+        date:       todayStr(),
+        meal_type:  meal,
+        entry_type: 'food',
+        name:       editName.trim() || product!.name,
+        calories:   n.cal,
+        protein:    n.prot,
+        carbs:      n.carb,
+        fat:        n.fat,
+        fiber:      n.fiber,
+        quantity:   grams,
+      });
+      onLogged();
+    } catch (e) {
+      setSubmitError(e instanceof Error ? e.message : 'Failed to save. Please try again.');
+      setSubmitting(false);
+    }
   }
 
   function reset() {
@@ -426,12 +435,16 @@ export default function BarcodeScanner({ meal, onMealChange, onLogged }: Props) 
             ))}
           </div>
 
+          {submitError && (
+            <p className="text-sm text-center" style={{ color: '#ef4444' }}>{submitError}</p>
+          )}
           <button
             onClick={handleAddToLog}
-            className="active-scale w-full py-3 rounded-input font-semibold text-sm"
-            style={{ background: '#d97706', color: '#1a1a1a' }}
+            disabled={submitting}
+            className="active-scale w-full py-3 rounded-input font-semibold text-sm flex items-center justify-center gap-2"
+            style={{ background: submitting ? '#3d3d3d' : '#d97706', color: submitting ? '#9b9b9b' : '#1a1a1a' }}
           >
-            Add to {meal}
+            {submitting ? 'Saving…' : `Add to ${meal}`}
           </button>
         </div>
       </div>
