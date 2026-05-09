@@ -47,6 +47,11 @@ self.addEventListener('fetch', (event) => {
   const { request } = event
   const url = new URL(request.url)
 
+  // Only intercept same-origin requests — let Supabase, APIs, etc. pass through natively
+  if (url.origin !== self.location.origin) {
+    return
+  }
+
   // Always fetch HTML fresh from network — never cache it
   if (request.destination === 'document' ||
       url.pathname === '/' ||
@@ -78,9 +83,6 @@ self.addEventListener('fetch', (event) => {
     )
     return
   }
-
-  // For everything else — network only
-  event.respondWith(fetch(request))
 })
 
 // Listen for skip waiting message from app
