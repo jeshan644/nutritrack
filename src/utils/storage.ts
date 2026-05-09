@@ -191,17 +191,7 @@ function entryToRow(entry: FoodLogEntry, sessionId: string) {
 }
 
 export async function getLogForDate(date: string): Promise<FoodLogEntry[]> {
-  if (!isSupabaseReady) {
-    return lsGet<FoodLogEntry[]>('nt_log', []).filter(e => e.date === date);
-  }
-  const sid = getSessionId();
-  const { data } = await supabase!
-    .from('food_log')
-    .select('*')
-    .eq('session_id', sid)
-    .eq('date', date)
-    .order('logged_at', { ascending: true });
-  return (data || []).map(rowToEntry);
+  return lsGet<FoodLogEntry[]>('nt_log', []).filter(e => e.date === date);
 }
 
 export async function getAllLog(): Promise<FoodLogEntry[]> {
@@ -218,15 +208,18 @@ export async function getAllLog(): Promise<FoodLogEntry[]> {
 }
 
 export async function addLogEntry(entry: FoodLogEntry): Promise<void> {
-  if (!isSupabaseReady) {
-    const log = lsGet<FoodLogEntry[]>('nt_log', []);
-    log.push(entry);
-    lsSet('nt_log', log);
-    return;
+  // Always write to localStorage as the source of truth
+  const log = lsGet<FoodLogEntry[]>('nt_log', []);
+  log.push(entry);
+  lsSet('nt_log', log);
+
+  // Also sync to Supabase if available (best-effort, non-blocking)
+  if (isSupabaseReady) {
+    const sid = getSessionId();
+    supabase!.from('food_log').insert(entryToRow(entry, sid)).then(({ error }) => {
+      if (error) console.warn('Supabase sync failed:', error.message);
+    }).catch(() => {/* network failure — localStorage already saved */});
   }
-  const sid = getSessionId();
-  const { error } = await supabase!.from('food_log').insert(entryToRow(entry, sid));
-  if (error) throw new Error(error.message);
 }
 
 export async function updateLogEntry(entry: FoodLogEntry): Promise<void> {
