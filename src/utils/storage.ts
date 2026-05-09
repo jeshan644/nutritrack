@@ -225,7 +225,8 @@ export async function addLogEntry(entry: FoodLogEntry): Promise<void> {
     return;
   }
   const sid = getSessionId();
-  await supabase!.from('food_log').insert(entryToRow(entry, sid));
+  const { error } = await supabase!.from('food_log').insert(entryToRow(entry, sid));
+  if (error) throw new Error(error.message);
 }
 
 export async function updateLogEntry(entry: FoodLogEntry): Promise<void> {
